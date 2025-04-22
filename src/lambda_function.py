@@ -9,9 +9,10 @@ from io import BytesIO
 
 s3_client = boto3.client('s3')
 
-# Model configuration
+# Configuration
 MODEL_BUCKET = 'project-mma'
 MODEL_KEY = 'model/best.pt'
+BUCKET = 'project-mma'
 
 def get_model_from_s3():
     """Get model directly from S3"""
@@ -45,13 +46,13 @@ def process_image(image_data, model_data):
     
     return predictions
 
-def get_image_files(bucket, prefix=''):
-    """Get all image files from S3 bucket"""
+def get_image_files(input_prefix):
+    """Get all image files from input bucket"""
     paginator = s3_client.get_paginator('list_objects_v2')
     image_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
     
     image_files = []
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+    for page in paginator.paginate(Bucket=BUCKET, Prefix=input_prefix):
         if 'Contents' in page:
             for obj in page['Contents']:
                 key = obj['Key']
@@ -66,26 +67,20 @@ def lambda_handler(event, context):
         body = json.loads(event['body'])
         
         # Get parameters from the request
-        input_bucket = body.get('input_bucket')
-        output_bucket = body.get('output_bucket')
+        input_prefix = body.get('input_prefix', 'images/')
+        output_prefix = body.get('output_prefix', 'results/')
         
-        if not all([input_bucket, output_bucket]):
-            return {
-                'statusCode': 400,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
-                },
-                'body': json.dumps({
-                    'error': 'Missing required parameters: input_bucket and output_bucket are required'
-                })
-            }
+        # Ensure prefixes end with '/'
+        if not input_prefix.endswith('/'):
+            input_prefix += '/'
+        if not output_prefix.endswith('/'):
+            output_prefix += '/'
         
         # Get model from S3
         model_data = get_model_from_s3()
         
         # Get all image files from input bucket
-        image_files = get_image_files(input_bucket)
+        image_files = get_image_files(input_prefix)
         
         if not image_files:
             return {
@@ -105,17 +100,18 @@ def lambda_handler(event, context):
         for image_key in image_files:
             try:
                 # Get image from S3
-                response = s3_client.get_object(Bucket=input_bucket, Key=image_key)
+                response = s3_client.get_object(Bucket=BUCKET, Key=image_key)
                 image_data = response['Body'].read()
                 
                 # Process image
                 predictions = process_image(image_data, model_data)
                 
                 # Save predictions to S3
-                output_key = f"predictions/{os.path.splitext(image_key)[0]}.json"
+                relative_path = os.path.relpath(image_key, input_prefix)
+                output_key = os.path.join(output_prefix, os.path.splitext(relative_path)[0] + '.json')
                 
                 s3_client.put_object(
-                    Bucket=output_bucket,
+                    Bucket=BUCKET,
                     Key=output_key,
                     Body=json.dumps(predictions),
                     ContentType='application/json'
