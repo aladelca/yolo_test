@@ -1,0 +1,5 @@
+boto3==1.34.34
+torch==2.2.1
+ultralytics==8.1.28
+opencv-python==4.9.0.80
+numpy==1.26.4 
